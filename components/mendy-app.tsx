@@ -2,6 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Glyph, IconSprite } from "@/components/icons";
+import { chatLanguage, currentLocation } from "@/lib/ai";
 import {
   CARE_LINE_DISPLAY,
   CARE_NEEDS,
@@ -9,7 +10,6 @@ import {
   DOCTOR_FOR,
   DOCTOR_WHATSAPP,
   FLW_PUBLIC_KEY,
-  MENDY_API_URL,
   RED_FLAGS,
   STARTERS,
   VERIFY_URL,
@@ -42,7 +42,7 @@ type Consult = {
 
 type DocStep = "form" | "paying" | "done";
 
-type MapResult = { href: string; label: string; embed: string | null };
+type MapResult = { label: string; embed: string };
 
 type FlwModal = { close: () => void };
 
@@ -106,12 +106,14 @@ export function MendyApp() {
 
   const appRef = useRef<HTMLDivElement>(null);
   const screenRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<HTMLDivElement>(null);
   const threadRef = useRef<HTMLDivElement>(null);
   const questionRef = useRef<HTMLTextAreaElement>(null);
   const phoneRef = useRef<HTMLSpanElement>(null);
   const nameRef = useRef<HTMLInputElement>(null);
   const payingRef = useRef<HTMLDivElement>(null);
   const turnsRef = useRef<Turn[]>([]);
+  const conversationIdRef = useRef("");
   const abortRef = useRef<AbortController | null>(null);
   const idRef = useRef(0);
   const chattingRef = useRef(false);
@@ -170,6 +172,11 @@ export function MendyApp() {
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
+
+  useEffect(() => {
+    if (!mapResult) return;
+    mapRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, [mapResult]);
 
   useEffect(() => {
     const body = document.body;
@@ -315,29 +322,38 @@ export function MendyApp() {
     requestAnimationFrame(() => follow(true));
 
     try {
-      let reply = "";
-      if (MENDY_API_URL) {
-        const controller = new AbortController();
-        abortRef.current = controller;
-        const response = await fetch(MENDY_API_URL, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: nextTurns }),
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          const error = new Error("upstream") as Error & { code?: string };
-          error.code = "upstream_error";
-          throw error;
-        }
-        const data = (await response.json()) as { reply?: string };
-        reply = String(data.reply || "");
-        turnsRef.current = [...turnsRef.current, { role: "assistant", content: reply }];
-        patchMendy(cardId, { html: md(reply), pending: false, actions: true });
-      } else {
-        turnsRef.current = turnsRef.current.slice(0, -1);
-        patchMendy(cardId, { html: md(fallbackText()), pending: false, actions: true });
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const location = await currentLocation();
+      if (controller.signal.aborted) {
+        const cancelled = new Error("aborted");
+        cancelled.name = "AbortError";
+        throw cancelled;
       }
+      const response = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: text,
+          language: chatLanguage(text),
+          ...(location ? { location } : {}),
+        }),
+        signal: controller.signal,
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        reply?: string;
+        conversationId?: string;
+        error?: string;
+      };
+      if (!response.ok) {
+        const failed = new Error("upstream") as Error & { code?: string };
+        failed.code = data.error || "upstream_error";
+        throw failed;
+      }
+      if (data.conversationId) conversationIdRef.current = data.conversationId;
+      const reply = String(data.reply || "");
+      turnsRef.current = [...turnsRef.current, { role: "assistant", content: reply }];
+      patchMendy(cardId, { html: md(reply), pending: false, actions: true });
     } catch (error) {
       const coded = error as { code?: string; name?: string; text?: string };
       if (coded.code === "cancelled" || coded.name === "AbortError") {
@@ -348,8 +364,14 @@ export function MendyApp() {
           turnsRef.current = turnsRef.current.slice(0, -1);
           patchMendy(cardId, { html: '<span class="muted">Stopped.</span>', pending: false, actions: false });
         }
+      } else if (coded.code === "not_configured") {
+        turnsRef.current = turnsRef.current.slice(0, -1);
+        patchMendy(cardId, { html: md(fallbackText()), pending: false, actions: true });
       } else {
-        const message = errorCopy(coded.code);
+        const message =
+          coded.code === "unexpected_response"
+            ? "Mendy replied, but this page could not read the answer. Please try again."
+            : errorCopy(coded.code);
         const html =
           (coded.text ? md(coded.text) : "") +
           md(
@@ -376,6 +398,7 @@ export function MendyApp() {
   function newChat() {
     abortRef.current?.abort();
     turnsRef.current = [];
+    conversationIdRef.current = "";
     setMessages([]);
     setChatting(false);
     setQuestion("");
@@ -384,13 +407,8 @@ export function MendyApp() {
     questionRef.current?.focus();
   }
 
-  function showMaps(href: string, label: string, embed: string | null) {
-    setMapResult({ href, label, embed });
-    try {
-      window.open(href, "_blank", "noopener");
-    } catch {
-      /* ignore */
-    }
+  function showMaps(label: string, embed: string) {
+    setMapResult({ label, embed });
   }
 
   function searchArea(event: React.FormEvent) {
@@ -402,15 +420,14 @@ export function MendyApp() {
     }
     setCareMsg("");
     const query = needQ + " in " + place + ", Nigeria";
-    showMaps("https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(query), query, query);
+    showMaps(query, query);
   }
 
   function searchNearMe() {
     const label = needQ + " near me";
-    const plain = "https://www.google.com/maps/search/?api=1&query=" + encodeURIComponent(label);
     if (!navigator.geolocation) {
-      setCareMsg("Google Maps will use your location to show places near you.");
-      showMaps(plain, label, null);
+      setCareMsg("The map will search for places near you.");
+      showMaps(label, label);
       return;
     }
     setCareMsg("Finding your location…");
@@ -419,7 +436,7 @@ export function MendyApp() {
       if (!done) {
         done = true;
         setCareMsg("");
-        showMaps(plain, label, null);
+        showMaps(label, label);
       }
     }, 9000);
     navigator.geolocation.getCurrentPosition(
@@ -429,18 +446,14 @@ export function MendyApp() {
         window.clearTimeout(timer);
         const ll = position.coords.latitude.toFixed(5) + "," + position.coords.longitude.toFixed(5);
         setCareMsg("");
-        showMaps(
-          "https://www.google.com/maps/search/" + encodeURIComponent(needQ) + "/@" + ll + ",14z",
-          label,
-          needQ + " near " + ll,
-        );
+        showMaps(label, needQ + " near " + ll);
       },
       () => {
         if (done) return;
         done = true;
         window.clearTimeout(timer);
-        setCareMsg("We couldn't get your location. Google Maps will try instead, or type your area.");
-        showMaps(plain, label, null);
+        setCareMsg("We couldn't get your location. Type your area, or the map will search nearby.");
+        showMaps(label, label);
       },
       { enableHighAccuracy: false, timeout: 8000, maximumAge: 300000 },
     );
@@ -800,7 +813,7 @@ export function MendyApp() {
               <div style={{ display: "flex", flexDirection: "column", gap: 14, maxWidth: 760 }}>
                 <span className="eyebrow">Find care near you</span>
                 <h1 className="big" id="care-h">Find a clinic, pharmacy or lab.</h1>
-                <p className="lead">Choose what you need, then search near you or type your area. Results open in Google Maps.</p>
+                <p className="lead">Choose what you need, then search near you or type your area. The map stays on this page.</p>
               </div>
               <div className="grid2">
                 <form className="care-form glass" onSubmit={searchArea}>
@@ -842,15 +855,6 @@ export function MendyApp() {
                     <button type="submit" className="ghost">Search this area</button>
                   </div>
                   <p className="toast" role="status">{careMsg}</p>
-                  <div className="result" hidden={!mapResult}>
-                    <a className="btn" href={mapResult?.href ?? "https://www.google.com/maps"} target="_blank" rel="noopener">
-                      Open results in Google Maps
-                      <Glyph id="i-arrow" />
-                    </a>
-                    <span className="muted" style={{ fontSize: 14 }}>
-                      {mapResult ? "Searching for: " + mapResult.label : ""}
-                    </span>
-                  </div>
                 </form>
                 <div className="stack">
                   <div className="card glass" style={{ display: "flex", flexDirection: "column", gap: 10 }}>
@@ -869,8 +873,8 @@ export function MendyApp() {
                   </div>
                 </div>
               </div>
-              <div className="map-box glass" hidden={!mapResult?.embed}>
-                {mapResult?.embed ? (
+              <div className="map-box glass" ref={mapRef} hidden={!mapResult}>
+                {mapResult ? (
                   <iframe
                     title={"Map of " + mapResult.label}
                     loading="lazy"
@@ -1096,7 +1100,10 @@ function MainNav({
         <Glyph id="i-chat" />
         Ask Mendy
       </a>
-      {/* <a href="#care" onClick={(event) => { event.preventDefault(); onGo("care"); }}><Glyph id="i-pin" />Find care</a> */}
+      <a href="#care" aria-current={view === "care" ? "page" : undefined} onClick={(event) => { event.preventDefault(); onGo("care"); }}>
+        <Glyph id="i-pin" />
+        Find care
+      </a>
       {/* <a href="#doctor" onClick={(event) => { event.preventDefault(); onGo("doctor"); }}><Glyph id="i-steth" />Doctor</a> */}
       <a href="#wallet" aria-current={view === "wallet" ? "page" : undefined} onClick={(event) => { event.preventDefault(); onGo("wallet"); }}>
         <Glyph id="i-wallet" />

@@ -3,7 +3,6 @@ export const CARE_LINE_INTL = "2349133293575";
 export const DOCTOR_FEE = 2000;
 export const DOCTOR_WHATSAPP = "2349133293575";
 
-export const MENDY_API_URL = process.env.NEXT_PUBLIC_MENDY_API_URL ?? "";
 export const FLW_PUBLIC_KEY = process.env.NEXT_PUBLIC_FLW_PUBLIC_KEY ?? "";
 export const VERIFY_URL = process.env.NEXT_PUBLIC_VERIFY_URL ?? "";
 
