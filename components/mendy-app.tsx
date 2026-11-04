@@ -1075,7 +1075,7 @@ export function MendyApp() {
 
             <footer>
               <span style={{ maxWidth: 620 }}>Mendy is not a doctor and does not diagnose. Always follow the advice of a qualified health worker.</span>
-              <span>Mendy by Indura Health · askmendy.ai · Report a problem: 0913 329 3575</span>
+              <span>Mendy by Indura Health ·  mendy.indurahealth.com · Report a problem: 0913 329 3575</span>
             </footer>
           </main>
         </div>
