@@ -4,7 +4,6 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Glyph, IconSprite } from "@/components/icons";
 import { chatLanguage, currentLocation } from "@/lib/ai";
 import {
-  appUrl,
   CARE_LINE_DISPLAY,
   CARE_NEEDS,
   DOCTOR_FEE,
@@ -330,7 +329,7 @@ export function MendyApp() {
         cancelled.name = "AbortError";
         throw cancelled;
       }
-      const response = await fetch(appUrl("/api/ai/chat/web"), {
+      const response = await fetch("/api/ai/chat/web", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -340,10 +339,11 @@ export function MendyApp() {
         }),
         signal: controller.signal,
       });
-      const data = (await response.json().catch(() => ({}))) as { reply?: string; error?: string };
+      const data = (await response.json().catch(() => ({}))) as { reply?: string; error?: string; message?: string };
       if (!response.ok || !data.reply) {
-        const failed = new Error("upstream") as Error & { code?: string };
+        const failed = new Error("upstream") as Error & { code?: string; text?: string };
         failed.code = data.error || (response.ok ? "unexpected_response" : "upstream_error");
+        if (typeof data.message === "string" && data.message.trim()) failed.text = data.message.trim();
         throw failed;
       }
       const reply = data.reply;
@@ -367,14 +367,13 @@ export function MendyApp() {
           coded.code === "unexpected_response"
             ? "Mendy replied, but this page could not read the answer. Please try again."
             : errorCopy(coded.code);
-        const html =
-          (coded.text ? md(coded.text) : "") +
-          md(
+        const html = md(
+          coded.text ||
             message ||
-              "Something went wrong. Please try again. If it keeps happening, report it on " +
-                CARE_LINE_DISPLAY +
-                ".",
-          );
+            "Something went wrong. Please try again. If it keeps happening, report it on " +
+              CARE_LINE_DISPLAY +
+              ".",
+        );
         turnsRef.current = turnsRef.current.slice(0, -1);
         patchMendy(cardId, { html, pending: false, actions: true });
       }

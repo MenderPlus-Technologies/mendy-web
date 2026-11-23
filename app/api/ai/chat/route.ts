@@ -58,6 +58,15 @@ function errorCode(payload: unknown) {
   return "upstream_error";
 }
 
+function errorMessage(code: string) {
+  if (code === "not_configured") return "Website chat is not configured.";
+  if (code === "MENDY_WEB_UNAUTHORIZED") return "Website chat was rejected by the health service.";
+  if (code === "upstream_unreachable") return "The health service could not be reached.";
+  if (code === "unexpected_response") return "Mendy replied, but this page could not read the answer.";
+  if (code === "rate_limited") return "Mendy is busy right now. Please try again in a little while.";
+  return "The health service could not answer.";
+}
+
 export async function POST(request: Request) {
   if (!allowChat(visitorIp(request))) {
     return json(request, { error: "rate_limited" }, 429);
@@ -77,8 +86,11 @@ export async function POST(request: Request) {
     return json(request, { error: "message_too_long" }, 400);
   }
   const secret = process.env.MENDY_WEB_SHARED_SECRET?.trim() ?? "";
-  if (secret.length < 32) {
-    return json(request, { error: "not_configured" }, 503);
+  const secretConfigured = secret.length >= 32;
+  console.info(`[mendy] chat handler secretConfigured=${secretConfigured}`);
+  if (!secretConfigured) {
+    console.error("[mendy] upstream request was not sent");
+    return json(request, { error: "not_configured", message: errorMessage("not_configured") }, 503);
   }
   const location = geoPoint(record.location);
   const upstream = await mendyRequest("/ai/chat/web", {
@@ -92,11 +104,12 @@ export async function POST(request: Request) {
   });
   if (upstream.status < 200 || upstream.status >= 300) {
     const status = upstream.status === 429 ? 429 : upstream.status >= 400 ? upstream.status : 502;
-    return json(request, { error: errorCode(upstream.payload) }, status);
+    const error = errorCode(upstream.payload);
+    return json(request, { error, message: errorMessage(error) }, status);
   }
   const chat = readChatPayload(upstream.payload, message);
   if (!chat.reply) {
-    return json(request, { error: "unexpected_response" }, 502);
+    return json(request, { error: "unexpected_response", message: errorMessage("unexpected_response") }, 502);
   }
   return json(request, { reply: chat.reply });
 }

@@ -17,11 +17,15 @@ export async function mendyRequest(
 ) {
   await connection();
   const base = mendyBaseUrl();
+  console.info(`[mendy] MENDY_API_BASE_URL configured=${Boolean(base)}`);
   if (!base) {
+    console.error(`[mendy] upstream request was not sent; ${init.method} ${path}`);
     return { status: 503, payload: { error: "not_configured" } as unknown };
   }
+  const url = mendyUrl(path);
+  console.info(`[mendy] upstream URL ${url}`);
   try {
-    const response = await fetch(mendyUrl(path), {
+    const response = await fetch(url, {
       method: init.method,
       headers: {
         Accept: "application/json",
@@ -31,17 +35,23 @@ export async function mendyRequest(
       body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
       cache: "no-store",
     });
+    const line = `[mendy] upstream ${response.ok ? "succeeded" : "failed"} status=${response.status} ${init.method} ${url}`;
+    if (response.ok) console.info(line);
+    else console.error(line);
     const text = await response.text();
     if (!text) return { status: response.status, payload: {} as unknown };
     try {
       return { status: response.status, payload: JSON.parse(text) as unknown };
     } catch {
+      console.error(`[mendy] ${init.method} ${url} returned a non-JSON body`);
       return {
         status: response.status,
         payload: { error: "upstream_error" } as unknown,
       };
     }
-  } catch {
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : "unknown error";
+    console.error(`[mendy] upstream network error ${init.method} ${url}: ${reason}`);
     return { status: 502, payload: { error: "upstream_unreachable" } as unknown };
   }
 }
