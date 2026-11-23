@@ -566,7 +566,7 @@ html:has(body.chatting){overscroll-behavior-y:none}
   // On your own website, set this to your Mendy backend. It receives
   // POST {messages:[{role, content}]} and returns {reply: "..."}.
   // Your backend should reply in the language of the user's latest message.
-  var MENDY_API_URL = "";
+  var MENDY_API_URL = process.env.NEXT_PUBLIC_APP_BASE_URL;
 
   // Doctor consultations
   var DOCTOR_FEE = 2000;                    // naira

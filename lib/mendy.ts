@@ -5,6 +5,12 @@ export const DOCTOR_WHATSAPP = "2349133293575";
 
 export const FLW_PUBLIC_KEY = process.env.NEXT_PUBLIC_FLW_PUBLIC_KEY ?? "";
 export const VERIFY_URL = process.env.NEXT_PUBLIC_VERIFY_URL ?? "";
+export const APP_BASE_URL = (process.env.NEXT_PUBLIC_APP_BASE_URL ?? "").trim().replace(/\/$/, "");
+
+export function appUrl(path: string) {
+  const route = path.startsWith("/") ? path : `/${path}`;
+  return APP_BASE_URL ? APP_BASE_URL + route : route;
+}
 
 export const VIEWS = ["ask", "care", "doctor", "wallet"] as const;
 export type ViewName = (typeof VIEWS)[number];

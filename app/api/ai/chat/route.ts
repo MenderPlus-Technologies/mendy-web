@@ -1,6 +1,36 @@
 import { NextResponse } from "next/server";
-import { readChatPayload, type GeoPoint } from "@/lib/ai";
+import { chatLanguage, readChatPayload, type ChatLanguage, type GeoPoint } from "@/lib/ai";
+import { allowChat, visitorIp } from "@/lib/chat-limit";
 import { mendyRequest } from "@/lib/mendy-api";
+
+const LANGUAGES = new Set<ChatLanguage>(["en", "ha", "yo", "ig", "pcm"]);
+const MAX_MESSAGE = 2000;
+const ALLOWED_ORIGINS = new Set([
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "http://127.0.0.1:3000",
+  "http://127.0.0.1:3001",
+  "https://mendy.indurahealth.com",
+]);
+
+function corsHeaders(request: Request): Record<string, string> {
+  const origin = request.headers.get("origin") ?? "";
+  if (!ALLOWED_ORIGINS.has(origin)) return {};
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Methods": "POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type",
+    Vary: "Origin",
+  };
+}
+
+function json(request: Request, body: unknown, status = 200) {
+  return NextResponse.json(body, { status, headers: corsHeaders(request) });
+}
+
+export function OPTIONS(request: Request) {
+  return new NextResponse(null, { status: 204, headers: corsHeaders(request) });
+}
 
 function geoPoint(value: unknown): GeoPoint | undefined {
   if (!value || typeof value !== "object") return undefined;
@@ -12,38 +42,61 @@ function geoPoint(value: unknown): GeoPoint | undefined {
   return { latitude, longitude };
 }
 
+function languageOf(value: unknown, message: string): ChatLanguage {
+  return typeof value === "string" && LANGUAGES.has(value as ChatLanguage) ? (value as ChatLanguage) : chatLanguage(message);
+}
+
+function errorCode(payload: unknown) {
+  if (!payload || typeof payload !== "object") return "upstream_error";
+  const error = (payload as { error?: unknown }).error;
+  if (typeof error === "string") return error;
+  if (error && typeof error === "object" && "code" in error) {
+    const code = String((error as { code?: unknown }).code || "");
+    if (code === "MENDY_WEB_NOT_CONFIGURED") return "not_configured";
+    return code || "upstream_error";
+  }
+  return "upstream_error";
+}
+
 export async function POST(request: Request) {
+  if (!allowChat(visitorIp(request))) {
+    return json(request, { error: "rate_limited" }, 429);
+  }
   let body: unknown;
   try {
     body = await request.json();
   } catch {
-    return NextResponse.json({ error: "invalid_json" }, { status: 400 });
+    return json(request, { error: "invalid_json" }, 400);
   }
   const record = body && typeof body === "object" ? (body as Record<string, unknown>) : {};
   const message = typeof record.message === "string" ? record.message.trim() : "";
   if (!message) {
-    return NextResponse.json({ error: "message_required" }, { status: 400 });
+    return json(request, { error: "message_required" }, 400);
   }
-  const language = record.language === "ha" ? "ha" : "en";
+  if (message.length > MAX_MESSAGE) {
+    return json(request, { error: "message_too_long" }, 400);
+  }
+  const secret = process.env.MENDY_WEB_SHARED_SECRET?.trim() ?? "";
+  if (secret.length < 32) {
+    return json(request, { error: "not_configured" }, 503);
+  }
   const location = geoPoint(record.location);
-  const upstream = await mendyRequest("/ai/chat/user", {
+  const upstream = await mendyRequest("/ai/chat/web", {
     method: "POST",
+    headers: { "X-Mendy-Web-Secret": secret },
     body: {
       message,
-      language,
+      language: languageOf(record.language, message),
       ...(location ? { location } : {}),
     },
   });
   if (upstream.status < 200 || upstream.status >= 300) {
-    const payload = upstream.payload && typeof upstream.payload === "object" ? upstream.payload : { error: "upstream_error" };
-    return NextResponse.json(payload, { status: upstream.status });
+    const status = upstream.status === 429 ? 429 : upstream.status >= 400 ? upstream.status : 502;
+    return json(request, { error: errorCode(upstream.payload) }, status);
   }
   const chat = readChatPayload(upstream.payload, message);
   if (!chat.reply) {
-    return NextResponse.json({ error: "unexpected_response", conversationId: chat.conversationId || undefined }, { status: 502 });
+    return json(request, { error: "unexpected_response" }, 502);
   }
-  return NextResponse.json({
-    reply: chat.reply,
-    ...(chat.conversationId ? { conversationId: chat.conversationId } : {}),
-  });
+  return json(request, { reply: chat.reply });
 }

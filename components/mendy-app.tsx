@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Glyph, IconSprite } from "@/components/icons";
 import { chatLanguage, currentLocation } from "@/lib/ai";
 import {
+  appUrl,
   CARE_LINE_DISPLAY,
   CARE_NEEDS,
   DOCTOR_FEE,
@@ -113,7 +114,6 @@ export function MendyApp() {
   const nameRef = useRef<HTMLInputElement>(null);
   const payingRef = useRef<HTMLDivElement>(null);
   const turnsRef = useRef<Turn[]>([]);
-  const conversationIdRef = useRef("");
   const abortRef = useRef<AbortController | null>(null);
   const idRef = useRef(0);
   const chattingRef = useRef(false);
@@ -330,7 +330,7 @@ export function MendyApp() {
         cancelled.name = "AbortError";
         throw cancelled;
       }
-      const response = await fetch("/api/ai/chat", {
+      const response = await fetch(appUrl("/api/ai/chat/web"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -340,18 +340,13 @@ export function MendyApp() {
         }),
         signal: controller.signal,
       });
-      const data = (await response.json().catch(() => ({}))) as {
-        reply?: string;
-        conversationId?: string;
-        error?: string;
-      };
-      if (!response.ok) {
+      const data = (await response.json().catch(() => ({}))) as { reply?: string; error?: string };
+      if (!response.ok || !data.reply) {
         const failed = new Error("upstream") as Error & { code?: string };
-        failed.code = data.error || "upstream_error";
+        failed.code = data.error || (response.ok ? "unexpected_response" : "upstream_error");
         throw failed;
       }
-      if (data.conversationId) conversationIdRef.current = data.conversationId;
-      const reply = String(data.reply || "");
+      const reply = data.reply;
       turnsRef.current = [...turnsRef.current, { role: "assistant", content: reply }];
       patchMendy(cardId, { html: md(reply), pending: false, actions: true });
     } catch (error) {
@@ -398,7 +393,6 @@ export function MendyApp() {
   function newChat() {
     abortRef.current?.abort();
     turnsRef.current = [];
-    conversationIdRef.current = "";
     setMessages([]);
     setChatting(false);
     setQuestion("");

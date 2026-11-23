@@ -1,14 +1,21 @@
 export type GeoPoint = { latitude: number; longitude: number };
 
-export type ChatLanguage = "en" | "ha";
+export type ChatLanguage = "en" | "ha" | "yo" | "ig" | "pcm";
 
 const HAUSA_STRONG =
   /\b(numfashi|lafiya|asibiti|magani|ciwo|ciwon|zazzabi|yaya|wannan|yana|tana|kana|bana|yaron|yarinya|jiki)\b/i;
 const HAUSA_PHRASE = /ba ya|bai iya|ina jin|don allah/i;
+const YORUBA = /[ẹọṣẸỌṢ]|\b(bawo|alafia|ejo|omo|nkan)\b/i;
+const IGBO = /[ịụọṅỊỤỌṄ]|\b(kedu|biko|daalu|ọrịa)\b/i;
+const PIDGIN = /\b(wetin|abeg|pikin|dey|wahala|shey|una|no be)\b/i;
 
-/** The chat API uses one path for every language. "ha" is Hausa; everything else we know about stays "en". */
+/** Website chat accepts en, ha, yo, ig, and pcm. The message picks the code. */
 export function chatLanguage(message: string): ChatLanguage {
-  return HAUSA_STRONG.test(message) || HAUSA_PHRASE.test(message) ? "ha" : "en";
+  if (HAUSA_STRONG.test(message) || HAUSA_PHRASE.test(message)) return "ha";
+  if (YORUBA.test(message)) return "yo";
+  if (IGBO.test(message)) return "ig";
+  if (PIDGIN.test(message)) return "pcm";
+  return "en";
 }
 
 export function currentLocation(): Promise<GeoPoint | undefined> {

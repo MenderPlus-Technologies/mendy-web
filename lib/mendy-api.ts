@@ -4,18 +4,29 @@ export function mendyBaseUrl() {
   return process.env.MENDY_API_BASE_URL?.trim().replace(/\/$/, "") ?? "";
 }
 
-export async function mendyRequest(path: string, init: { method: string; body?: unknown }) {
+function mendyUrl(path: string) {
+  const base = mendyBaseUrl();
+  const host = base.endsWith("/api") ? base.slice(0, -"/api".length) : base;
+  const route = path.startsWith("/") ? path : `/${path}`;
+  return host + "/api" + route;
+}
+
+export async function mendyRequest(
+  path: string,
+  init: { method: string; body?: unknown; headers?: Record<string, string> },
+) {
   await connection();
   const base = mendyBaseUrl();
   if (!base) {
     return { status: 503, payload: { error: "not_configured" } as unknown };
   }
   try {
-    const response = await fetch(base + path, {
+    const response = await fetch(mendyUrl(path), {
       method: init.method,
       headers: {
         Accept: "application/json",
         ...(init.body !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...init.headers,
       },
       body: init.body !== undefined ? JSON.stringify(init.body) : undefined,
       cache: "no-store",
@@ -27,7 +38,7 @@ export async function mendyRequest(path: string, init: { method: string; body?: 
     } catch {
       return {
         status: response.status,
-        payload: { error: "upstream_error", message: text.slice(0, 500) } as unknown,
+        payload: { error: "upstream_error" } as unknown,
       };
     }
   } catch {
